@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Review Sentiment Classifier</title>
+<style>
+:root{
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+  color-scheme:light;
+  --bg:#f6f5f1;--card:#ffffff;--text:#1d1d1b;--muted:#6b6a66;--border:#dcdad3;
+  --pos:#1a7f4b;--pos-bg:#e2f4ea;--neg:#b42318;--neg-bg:#fde8e6;--neu:#5a5f6b;--neu-bg:#eceef2;
+  --accent:#2b4fd8;--accent-text:#ffffff;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#16171a;--card:#202226;--text:#ecebe6;--muted:#9a9a94;--border:#34363b;
+    --pos:#5fd39a;--pos-bg:#16352a;--neg:#ff8a80;--neg-bg:#3d1e1b;--neu:#b4b9c4;--neu-bg:#2b2e35;
+    --accent:#6f8cff;--accent-text:#10131c;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#16171a;--card:#202226;--text:#ecebe6;--muted:#9a9a94;--border:#34363b;
+  --pos:#5fd39a;--pos-bg:#16352a;--neg:#ff8a80;--neg-bg:#3d1e1b;--neu:#b4b9c4;--neu-bg:#2b2e35;
+  --accent:#6f8cff;--accent-text:#10131c;
+}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;line-height:1.5}
+main{max-width:680px;margin:0 auto;padding:24px 16px 48px}
+h1{font-size:1.5rem;margin:0 0 4px}
+p.sub{margin:0 0 20px;color:var(--muted)}
+.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px;margin-bottom:16px}
+label{display:block;font-weight:600;margin-bottom:8px}
+textarea{width:100%;min-height:110px;resize:vertical;padding:12px;font:inherit;color:var(--text);
+  background:var(--bg);border:1px solid var(--border);border-radius:10px}
+textarea:focus{outline:2px solid var(--accent);outline-offset:1px}
+.row{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+button{font:inherit;cursor:pointer;border-radius:10px;padding:9px 16px;border:1px solid var(--border);
+  background:var(--card);color:var(--text)}
+button.primary{background:var(--accent);color:var(--accent-text);border-color:var(--accent);font-weight:600}
+button.chip{font-size:.85rem;padding:5px 10px;border-radius:999px;color:var(--muted)}
+button:hover{filter:brightness(.96)}
+#result{display:flex;align-items:center;justify-content:center;min-height:90px;border-radius:12px;
+  font-size:2rem;font-weight:700;background:var(--neu-bg);color:var(--neu)}
+#result.Positive{background:var(--pos-bg);color:var(--pos)}
+#result.Negative{background:var(--neg-bg);color:var(--neg)}
+#result.Neutral{background:var(--neu-bg);color:var(--neu)}
+.small{font-size:.85rem;color:var(--muted);margin-top:8px}
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:.9rem}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:top}
+td.ok{color:var(--pos);font-weight:600}td.bad{color:var(--neg);font-weight:600}
+</style>
+</head>
+<body>
+<main>
+  <h1>Review Sentiment Classifier</h1>
+  <p class="sub">Paste a customer review. The output is exactly one word: Positive, Negative, or Neutral.</p>
+
+  <div class="card">
+    <label for="review">Customer review</label>
+    <textarea id="review" placeholder="The phone is good, but the battery life is terrible."></textarea>
+    <div class="row">
+      <button class="primary" id="go">Classify</button>
+      <button id="clear">Clear</button>
+    </div>
+    <div class="small">Try an example:</div>
+    <div class="row" id="chips" style="margin-top:6px"></div>
+  </div>
+
+  <div class="card">
+    <label>Sentiment</label>
+    <div id="result" aria-live="polite">–</div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="margin:0 0 10px;align-items:center">
+      <button id="runTests">Run test cases</button>
+      <span class="small" id="testSummary" style="margin:0"></span>
+    </div>
+    <div class="scroll"><table id="testTable" hidden>
+      <thead><tr><th>Review</th><th>Expected</th><th>Got</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </div>
+</main>
+
+<script>
+/* ---------- Lexicons (word -> strength 1..3) ---------- */
+const POSITIVE = {
+  good:1, nice:1, fine:1, decent:1, okay:0, ok:0, great:2, happy:2, helpful:2,
+  love:3, loved:3, like:1, liked:1, satisfied:2, recommend:2, recommended:2,
+  fast:1, quick:1, comfortable:2, durable:2, perfect:3, excellent:3, amazing:3,
+  awesome:3, fantastic:3, wonderful:3, superb:3, worth:2, quality:1, beautiful:2,
+  polite:1, friendly:1, impressed:2, best:3, smooth:1, reliable:2, easy:1,
+  pleased:2, brilliant:3, outstanding:3, thanks:1
+};
+const NEGATIVE = {
+  bad:2, poor:2, slow:1, late:2, delayed:2, damaged:3, broken:3, broke:3,
+  cracked:3, defective:3, faulty:3, terrible:3, awful:3, horrible:3, worst:3,
+  disappointed:3, disappointing:3, useless:3, waste:3, refund:2, "return":1,
+  returned:2, missing:2, wrong:2, fake:3, cheap:1, rude:2, unhelpful:2,
+  problem:2, problems:2, issue:2, issues:2, hate:3, hated:3, regret:3,
+  overpriced:2, stopped:2, failed:3, failure:3, scam:3, uncomfortable:2,
+  dead:3, annoying:2, frustrating:3, unacceptable:3, never:1, pathetic:3,
+  mediocre:2, lacking:2
+};
+const NEGATIONS = new Set(["not","no","never","isn't","wasn't","don't","doesn't",
+  "didn't","can't","cannot","won't","hardly","barely","isnt","wasnt","dont",
+  "doesnt","didnt","cant","wont"]);
+const INTENSIFIERS = {very:1.5, extremely:2.0, really:1.5, so:1.3, absolutely:2.0, totally:1.5, highly:1.5};
+const CONTRAST = new Set(["but","however","although","though","yet","except"]);
+
+const NEGATIVE_PHRASES = [
+  /not worth/, /waste of money/, /doesn'?t work/, /does not work/, /stopped working/,
+  /not as described/, /fell apart/, /not happy/, /not satisfied/,
+  /too (small|big|slow|expensive)/, /never again/, /don'?t buy/, /do not buy/, /not recommend/
+];
+const POSITIVE_PHRASES = [
+  /works? (great|perfectly|well)/, /value for money/, /worth (it|the money)/,
+  /highly recommend/, /will buy again/, /exceeded (my )?expectations/
+];
+
+/* ---------- Model ---------- */
+function tokenize(text){
+  return text.toLowerCase().replace(/[\u2019\u2018]/g, "'").match(/[a-z']+|[,;.!?]/g) || [];
+}
+
+function scoreClause(tokens){
+  let score = 0;
+  tokens.forEach((tok, i) => {
+    let base = (POSITIVE[tok] || 0) - (NEGATIVE[tok] || 0);
+    if (base === 0) return;
+    if (i > 0 && INTENSIFIERS[tokens[i-1]]) base *= INTENSIFIERS[tokens[i-1]];
+    const windowTokens = tokens.slice(Math.max(0, i-3), i);
+    if (windowTokens.some(w => NEGATIONS.has(w))) base = -base * 0.8;
+    score += base;
+  });
+  return score;
+}
+
+function scoreReview(review){
+  const text = review.toLowerCase().replace(/[\u2019\u2018]/g, "'").trim();
+  const tokens = tokenize(text);
+  const clauses = [];
+  let current = [];
+  tokens.forEach(tok => {
+    if (CONTRAST.has(tok)) { clauses.push(current); current = []; }
+    else current.push(tok);
+  });
+  clauses.push(current);
+
+  let total = 0;
+  clauses.forEach((c, idx) => { total += (idx === 0 ? 1.0 : 1.6) * scoreClause(c); });
+  NEGATIVE_PHRASES.forEach(p => { if (p.test(text)) total -= 2.5; });
+  POSITIVE_PHRASES.forEach(p => { if (p.test(text)) total += 2.5; });
+  return total;
+}
+
+/* Returns exactly one of: "Positive", "Negative", "Neutral" */
+function classify(review){
+  if (typeof review !== "string" || !review.trim()) return "Neutral";
+  const s = scoreReview(review);
+  if (s >= 1) return "Positive";
+  if (s <= -1) return "Negative";
+  return "Neutral";
+}
+
+/* ---------- Tests ---------- */
+const TEST_CASES = [
+  ["The product is excellent, and I love its quality.", "Positive"],
+  ["The delivery was late, and the product was damaged.", "Negative"],
+  ["The product arrived yesterday.", "Neutral"],
+  ["The customer support team was extremely helpful.", "Positive"],
+  ["The product is not worth the money.", "Negative"],
+  ["The package contained two items.", "Neutral"],
+  ["The phone is good, but the battery life is terrible.", "Negative"],
+  ["Fast shipping and the fabric feels great.", "Positive"],
+  ["The screen cracked after two days.", "Negative"],
+  ["The box has a blue label on it.", "Neutral"],
+  ["Nice design, but it stopped working within a week.", "Negative"],
+  ["The battery is terrible, but the camera is absolutely amazing and I love it.", "Positive"],
+  ["It is not bad at all, quite good actually.", "Positive"],
+  ["I ordered it on Monday.", "Neutral"]
+];
+
+/* ---------- UI ---------- */
+const $ = id => document.getElementById(id);
+
+function show(){
+  const out = classify($("review").value);
+  const el = $("result");
+  el.textContent = out;
+  el.className = out;
+}
+
+$("go").addEventListener("click", show);
+$("clear").addEventListener("click", () => {
+  $("review").value = "";
+  $("result").textContent = "–";
+  $("result").className = "";
+});
+$("review").addEventListener("keydown", e => {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) show();
+});
+
+TEST_CASES.slice(0, 7).forEach(([text]) => {
+  const b = document.createElement("button");
+  b.className = "chip";
+  b.textContent = text.length > 34 ? text.slice(0, 32) + "…" : text;
+  b.title = text;
+  b.addEventListener("click", () => { $("review").value = text; show(); });
+  $("chips").appendChild(b);
+});
+
+$("runTests").addEventListener("click", () => {
+  const tbody = $("testTable").querySelector("tbody");
+  tbody.innerHTML = "";
+  let passed = 0;
+  TEST_CASES.forEach(([text, expected]) => {
+    const got = classify(text);
+    const ok = got === expected;
+    if (ok) passed++;
+    const tr = document.createElement("tr");
+    [text, expected, got].forEach((v, i) => {
+      const td = document.createElement("td");
+      td.textContent = v;
+      if (i === 2) td.className = ok ? "ok" : "bad";
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  $("testTable").hidden = false;
+  $("testSummary").textContent = passed + " / " + TEST_CASES.length + " tests passed";
+});
+</script>
+</body>
+</html>
